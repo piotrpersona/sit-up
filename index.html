@@ -21,10 +21,16 @@
         <div class="row">
           <button id="start" type="button">Start</button>
           <button id="calibrate" type="button" disabled>Calibrate good posture</button>
+          <button id="stop" type="button" class="danger" disabled>Stop</button>
         </div>
         <div id="metrics" class="metrics"></div>
       </section>
     </main>
+    <dialog id="dialog">
+      <h2 id="dialogTitle"></h2>
+      <p id="dialogBody"></p>
+      <form method="dialog"><button type="submit">OK</button></form>
+    </dialog>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>

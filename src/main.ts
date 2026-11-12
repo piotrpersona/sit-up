@@ -25,6 +25,10 @@ const overlay = byId<HTMLCanvasElement>("overlay");
 const status = byId<HTMLDivElement>("status");
 const startButton = byId<HTMLButtonElement>("start");
 const calibrateButton = byId<HTMLButtonElement>("calibrate");
+const stopButton = byId<HTMLButtonElement>("stop");
+const dialog = byId<HTMLDialogElement>("dialog");
+const dialogTitle = byId<HTMLHeadingElement>("dialogTitle");
+const dialogBody = byId<HTMLParagraphElement>("dialogBody");
 const metricsContainer = byId<HTMLDivElement>("metrics");
 const context = overlay.getContext("2d");
 
@@ -58,6 +62,13 @@ const alarm = new SlouchAlarm(beeper, HOLD_MS, REPEAT_MS);
 let landmarker: PoseLandmarker | undefined;
 let smoothed: Reading = {};
 let lastVideoTime = -1;
+let wakeLock: WakeLockSentinel | undefined;
+
+function showDialog(title: string, body: string): void {
+  dialogTitle.textContent = title;
+  dialogBody.textContent = body;
+  dialog.showModal();
+}
 
 interface Row {
   root: HTMLDivElement;
@@ -220,7 +231,8 @@ async function start(): Promise<void> {
     await video.play();
     landmarker = await createLandmarker();
     calibrateButton.disabled = false;
-    await navigator.wakeLock?.request("screen").catch(() => undefined);
+    stopButton.disabled = false;
+    wakeLock = await navigator.wakeLock?.request("screen").catch(() => undefined);
     setStatus("Sit straight, then press Calibrate", "idle");
   } catch (error) {
     startButton.disabled = false;
@@ -228,12 +240,37 @@ async function start(): Promise<void> {
   }
 }
 
+function stop(): void {
+  landmarker?.close();
+  landmarker = undefined;
+  for (const track of (video.srcObject as MediaStream | null)?.getTracks() ?? []) track.stop();
+  video.srcObject = null;
+  void wakeLock?.release();
+  wakeLock = undefined;
+  alarm.update(false, performance.now());
+  smoothed = {};
+  lastVideoTime = -1;
+  context?.clearRect(0, 0, overlay.width, overlay.height);
+  for (const id of METRIC_IDS) renderRow(id, undefined, false);
+  startButton.disabled = false;
+  calibrateButton.disabled = true;
+  stopButton.disabled = true;
+  setStatus("Stopped. Camera released.", "idle");
+}
+
 startButton.addEventListener("click", () => void start());
+stopButton.addEventListener("click", stop);
 
 calibrateButton.addEventListener("click", () => {
-  if (smoothed.forwardHead === undefined) return;
+  if (smoothed.forwardHead === undefined) {
+    showDialog("Calibration failed", "I can't see your head and shoulders clearly. Move into view and try again.");
+    return;
+  }
   settings.baselines = { ...smoothed };
   saveSettings();
+  const lines = METRIC_IDS.map((id) => `${METRICS[id].label.split(" (")[0]}: ${degrees(settings.baselines[id])}`);
+  const hipsNote = settings.baselines.slouch === undefined ? "\nHips not in view, slouch check is off." : "";
+  showDialog("Posture calibrated", `This is now your good posture.\n${lines.join("\n")}${hipsNote}`);
 });
 
 for (const id of METRIC_IDS) renderRow(id, undefined, false);
