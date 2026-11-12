@@ -37,8 +37,12 @@ const context = overlay.getContext("2d");
 
 function loadSettings(): Settings {
   const defaults: Settings = {
-    mode: "side",
-    thresholds: { side: thresholdRange.side.initial, front: thresholdRange.front.initial },
+    mode: "angled",
+    thresholds: {
+      angled: thresholdRange.angled.initial,
+      side: thresholdRange.side.initial,
+      front: thresholdRange.front.initial,
+    },
     baselines: {},
   };
   try {
@@ -71,7 +75,7 @@ function setStatus(text: string, kind: "idle" | "good" | "bad"): void {
 
 function formatValue(mode: Mode, value: number | undefined): string {
   if (value === undefined) return "-";
-  return mode === "side" ? `${value.toFixed(1)}°` : value.toFixed(2);
+  return mode === "front" ? value.toFixed(2) : `${value.toFixed(1)}°`;
 }
 
 function syncControls(): void {
@@ -87,7 +91,7 @@ function syncControls(): void {
 function isVisible(mode: Mode, pose: Pose): boolean {
   const left = Math.min(pose.leftEar.visibility, pose.leftShoulder.visibility);
   const right = Math.min(pose.rightEar.visibility, pose.rightShoulder.visibility);
-  return mode === "side" ? Math.max(left, right) >= MIN_VISIBILITY : Math.min(left, right) >= MIN_VISIBILITY;
+  return mode === "front" ? Math.min(left, right) >= MIN_VISIBILITY : Math.max(left, right) >= MIN_VISIBILITY;
 }
 
 function draw(pose: Pose | undefined, bad: boolean): void {
@@ -126,7 +130,9 @@ function tick(): void {
   lastVideoTime = video.currentTime;
 
   const result = landmarker.detectForVideo(video, performance.now());
-  const pose = result.landmarks[0] && toPose(result.landmarks[0]);
+  const landmarks = result.landmarks[0];
+  const worldLandmarks = result.worldLandmarks[0];
+  const pose = landmarks && worldLandmarks && toPose(landmarks, worldLandmarks);
   const mode = settings.mode;
 
   if (!pose || !isVisible(mode, pose)) {

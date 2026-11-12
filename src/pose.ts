@@ -1,4 +1,4 @@
-import { FilesetResolver, PoseLandmarker, type NormalizedLandmark } from "@mediapipe/tasks-vision";
+import { FilesetResolver, PoseLandmarker, type Landmark, type NormalizedLandmark } from "@mediapipe/tasks-vision";
 import type { Pose } from "./metrics";
 
 const EAR_LEFT = 7;
@@ -20,7 +20,7 @@ export async function createLandmarker(): Promise<PoseLandmarker> {
   }
 }
 
-export function toPose(landmarks: NormalizedLandmark[]): Pose | undefined {
+export function toPose(landmarks: NormalizedLandmark[], worldLandmarks: Landmark[]): Pose | undefined {
   const point = (index: number) => {
     const landmark = landmarks[index];
     return landmark && { x: landmark.x, y: landmark.y, visibility: landmark.visibility ?? 0 };
@@ -29,6 +29,26 @@ export function toPose(landmarks: NormalizedLandmark[]): Pose | undefined {
   const rightEar = point(EAR_RIGHT);
   const leftShoulder = point(SHOULDER_LEFT);
   const rightShoulder = point(SHOULDER_RIGHT);
+  const world = (index: number) => {
+    const landmark = worldLandmarks[index];
+    return landmark && { x: landmark.x, y: landmark.y, z: landmark.z };
+  };
+  const worldLeftEar = world(EAR_LEFT);
+  const worldRightEar = world(EAR_RIGHT);
+  const worldLeftShoulder = world(SHOULDER_LEFT);
+  const worldRightShoulder = world(SHOULDER_RIGHT);
   if (!leftEar || !rightEar || !leftShoulder || !rightShoulder) return undefined;
-  return { leftEar, rightEar, leftShoulder, rightShoulder };
+  if (!worldLeftEar || !worldRightEar || !worldLeftShoulder || !worldRightShoulder) return undefined;
+  return {
+    leftEar,
+    rightEar,
+    leftShoulder,
+    rightShoulder,
+    world: {
+      leftEar: worldLeftEar,
+      rightEar: worldRightEar,
+      leftShoulder: worldLeftShoulder,
+      rightShoulder: worldRightShoulder,
+    },
+  };
 }
