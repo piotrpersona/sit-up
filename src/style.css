@@ -91,3 +91,9 @@ button:disabled { opacity: 0.4; cursor: not-allowed; }
 label { display: grid; gap: 6px; font-size: 14px; }
 select, input[type="range"] { font: inherit; width: 100%; }
 .readout { margin: 0; font-size: 14px; opacity: 0.8; }
+
+.metrics { display: grid; gap: 14px; }
+.metric { display: grid; gap: 4px; }
+.metric-title { display: flex; justify-content: space-between; font-size: 14px; font-weight: 600; }
+.metric-readout { font-size: 13px; opacity: 0.75; }
+.metric.bad .metric-title { color: var(--bad); }

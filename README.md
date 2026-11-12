@@ -4,8 +4,13 @@ Browser slouch detector. Static app, no backend. The camera video stays on your 
 
 MediaPipe Pose finds ear and shoulder landmarks. You calibrate a good posture once, then it beeps when you slouch for 3 seconds.
 
-- Side view (recommended): angle of the ear-shoulder line from vertical. A phone on a stand works, open the page on it.
-- Front view (webcam): ear-to-shoulder height relative to shoulder width. Less accurate.
+Three separate checks, each with its own threshold, all from MediaPipe 3D landmarks so the camera can sit at any angle from the side to about 45°:
+
+- Forward head: how far the ear sits in front of the shoulders.
+- Slouch: how far the shoulders sit in front of the hips. Needs the hips in view, otherwise it is skipped.
+- Head down (neck flexion): the angle of the ear-to-nose line, grows when the chin tucks or you look down.
+
+All values are compared to your calibrated baseline, so calibrate from the camera position you will actually use.
 
 Keep the tab visible, browsers throttle hidden tabs.
 

@@ -1,93 +1,79 @@
 import { describe, expect, it } from "vitest";
-import { angledAngle, deviation, frontRatio, sideAngle, type Point3D, type Pose, type WorldPose } from "./metrics";
+import { canSee, measure, type LandmarkName, type Point3D, type Pose } from "./metrics";
 
-const frame = { width: 100, height: 100 };
-const p = (x: number, y: number, visibility = 1) => ({ x, y, visibility });
-const noWorld: WorldPose = {
-  leftEar: { x: 0, y: 0, z: 0 },
-  rightEar: { x: 0, y: 0, z: 0 },
-  leftShoulder: { x: 0, y: 0, z: 0 },
-  rightShoulder: { x: 0, y: 0, z: 0 },
-};
+const DEG = 180 / Math.PI;
 
-describe("sideAngle", () => {
-  const cases: { name: string; pose: Pose; expected: number }[] = [
-    {
-      name: "ear straight above shoulder",
-      pose: { leftEar: p(0.5, 0.2), rightEar: p(0.5, 0.2, 0), leftShoulder: p(0.5, 0.5), rightShoulder: p(0.5, 0.5, 0), world: noWorld },
-      expected: 0,
-    },
-    {
-      name: "ear forward 45 degrees",
-      pose: { leftEar: p(0.7, 0.3), rightEar: p(0.7, 0.3, 0), leftShoulder: p(0.5, 0.5), rightShoulder: p(0.5, 0.5, 0), world: noWorld },
-      expected: 45,
-    },
-    {
-      name: "mirrored facing direction gives the same angle",
-      pose: { leftEar: p(0.3, 0.3), rightEar: p(0.3, 0.3, 0), leftShoulder: p(0.5, 0.5), rightShoulder: p(0.5, 0.5, 0), world: noWorld },
-      expected: 45,
-    },
-    {
-      name: "uses the more visible right side",
-      pose: { leftEar: p(0.9, 0.3, 0.1), rightEar: p(0.5, 0.2), leftShoulder: p(0.9, 0.5, 0.1), rightShoulder: p(0.5, 0.5), world: noWorld },
-      expected: 0,
-    },
-  ];
+interface Build {
+  yaw: number;
+  trunkForward?: number;
+  headForward?: number;
+  noseDrop?: number;
+  hipVisibility?: number;
+  mirrored?: boolean;
+}
 
-  it.each(cases)("$name", ({ pose, expected }) => {
-    expect(sideAngle(pose, frame)).toBeCloseTo(expected, 5);
+function person({ yaw, trunkForward = 0, headForward = 0, noseDrop = 0.03, hipVisibility = 1, mirrored = false }: Build): Pose {
+  const radians = (yaw * Math.PI) / 180;
+  const axis = { x: Math.cos(radians), z: Math.sin(radians) };
+  const forward = { x: -Math.sin(radians), z: Math.cos(radians) };
+  const at = (along: number, down: number, ahead: number): Point3D => ({
+    x: axis.x * along + forward.x * ahead,
+    y: down,
+    z: axis.z * along + forward.z * ahead,
   });
-});
-
-describe("frontRatio", () => {
-  it("shrinks as the head drops toward the shoulders", () => {
-    const upright: Pose = { leftEar: p(0.4, 0.2), rightEar: p(0.6, 0.2), leftShoulder: p(0.3, 0.5), rightShoulder: p(0.7, 0.5), world: noWorld };
-    const slouched: Pose = { ...upright, leftEar: p(0.4, 0.4), rightEar: p(0.6, 0.4) };
-    expect(frontRatio(upright, frame)).toBeCloseTo(0.75, 5);
-    expect(frontRatio(slouched, frame)).toBeCloseTo(0.25, 5);
-  });
-});
-
-describe("deviation", () => {
-  const cases = [
-    { mode: "side" as const, baseline: 10, current: 25, expected: 15 },
-    { mode: "side" as const, baseline: 10, current: 5, expected: -5 },
-    { mode: "front" as const, baseline: 0.8, current: 0.6, expected: 25 },
-    { mode: "front" as const, baseline: 0.8, current: 0.88, expected: -10 },
-  ];
-
-  it.each(cases)("$mode $baseline -> $current", ({ mode, baseline, current, expected }) => {
-    expect(deviation(mode, baseline, current)).toBeCloseTo(expected, 5);
-  });
-});
-
-describe("angledAngle", () => {
-  const person = (yawDegrees: number, forwardOffset: number): WorldPose => {
-    const yaw = (yawDegrees * Math.PI) / 180;
-    const axis = { x: Math.cos(yaw), z: Math.sin(yaw) };
-    const forward = { x: -Math.sin(yaw), z: Math.cos(yaw) };
-    const at = (along: number, up: number, ahead: number): Point3D => ({
-      x: axis.x * along + forward.x * ahead,
-      y: -up,
-      z: axis.z * along + forward.z * ahead,
-    });
-    return {
-      leftShoulder: at(-0.2, 0, 0),
-      rightShoulder: at(0.2, 0, 0),
-      leftEar: at(-0.08, 0.15, forwardOffset),
-      rightEar: at(0.08, 0.15, forwardOffset),
-    };
+  const side = mirrored ? -1 : 1;
+  const headAhead = trunkForward + headForward;
+  const world: Record<LandmarkName, Point3D> = {
+    leftShoulder: at(-0.2 * side, 0, trunkForward),
+    rightShoulder: at(0.2 * side, 0, trunkForward),
+    leftEar: at(-0.08 * side, -0.15, headAhead),
+    rightEar: at(0.08 * side, -0.15, headAhead),
+    nose: at(0, -0.15 + noseDrop, headAhead + 0.1),
+    leftHip: at(-0.1 * side, 0.5, 0),
+    rightHip: at(0.1 * side, 0.5, 0),
   };
+  const image = Object.fromEntries(
+    (Object.keys(world) as LandmarkName[]).map((name) => [
+      name,
+      { x: 0, y: 0, visibility: name.endsWith("Hip") ? hipVisibility : 1 },
+    ]),
+  ) as Pose["image"];
+  return { image, world };
+}
 
+describe("measure", () => {
   const cases = [
-    { yaw: 0, forwardOffset: 0.15, expected: 45 },
-    { yaw: 45, forwardOffset: 0.15, expected: 45 },
-    { yaw: 90, forwardOffset: 0.15, expected: 45 },
-    { yaw: 45, forwardOffset: 0, expected: 0 },
-    { yaw: 30, forwardOffset: 0.05, expected: Math.atan2(0.05, 0.15) * (180 / Math.PI) },
+    { name: "upright", build: { yaw: 0 }, forwardHead: 0, slouch: 0, headDown: Math.atan2(0.03, 0.1) * DEG },
+    { name: "head forward", build: { yaw: 0, headForward: 0.05 }, forwardHead: Math.atan2(0.05, 0.15) * DEG, slouch: 0, headDown: Math.atan2(0.03, 0.1) * DEG },
+    { name: "head forward at 45 degrees", build: { yaw: 45, headForward: 0.05 }, forwardHead: Math.atan2(0.05, 0.15) * DEG, slouch: 0, headDown: Math.atan2(0.03, 0.1) * DEG },
+    { name: "head forward at 90 degrees", build: { yaw: 90, headForward: 0.05 }, forwardHead: Math.atan2(0.05, 0.15) * DEG, slouch: 0, headDown: Math.atan2(0.03, 0.1) * DEG },
+    { name: "mirrored body", build: { yaw: 30, headForward: 0.05, mirrored: true }, forwardHead: Math.atan2(0.05, 0.15) * DEG, slouch: 0, headDown: Math.atan2(0.03, 0.1) * DEG },
+    { name: "slouched trunk", build: { yaw: 45, trunkForward: 0.1 }, forwardHead: 0, slouch: Math.atan2(0.1, 0.5) * DEG, headDown: Math.atan2(0.03, 0.1) * DEG },
+    { name: "chin tucked", build: { yaw: 45, noseDrop: 0.08 }, forwardHead: 0, slouch: 0, headDown: Math.atan2(0.08, 0.1) * DEG },
+    { name: "head leaning back is negative", build: { yaw: 45, headForward: -0.05 }, forwardHead: Math.atan2(-0.05, 0.15) * DEG, slouch: 0, headDown: Math.atan2(0.03, 0.1) * DEG },
   ];
 
-  it.each(cases)("yaw $yaw offset $forwardOffset", ({ yaw, forwardOffset, expected }) => {
-    expect(angledAngle(person(yaw, forwardOffset))).toBeCloseTo(expected, 5);
+  it.each(cases)("$name", ({ build, forwardHead, slouch, headDown }) => {
+    const reading = measure(person(build));
+    expect(reading.forwardHead).toBeCloseTo(forwardHead, 5);
+    expect(reading.slouch).toBeCloseTo(slouch, 5);
+    expect(reading.headDown).toBeCloseTo(headDown, 5);
+  });
+
+  it("skips slouch when hips are not visible", () => {
+    const reading = measure(person({ yaw: 0, hipVisibility: 0.1 }));
+    expect(reading.slouch).toBeUndefined();
+    expect(reading.forwardHead).toBeDefined();
+  });
+});
+
+describe("canSee", () => {
+  it("needs one ear and shoulder pair", () => {
+    const pose = person({ yaw: 0 });
+    expect(canSee(pose)).toBe(true);
+    pose.image.leftEar.visibility = 0.1;
+    expect(canSee(pose)).toBe(true);
+    pose.image.rightShoulder.visibility = 0.1;
+    expect(canSee(pose)).toBe(false);
   });
 });

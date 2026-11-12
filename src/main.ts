@@ -1,19 +1,17 @@
 import type { PoseLandmarker } from "@mediapipe/tasks-vision";
 import { Beeper, SlouchAlarm } from "./alarm";
-import { deviation, measure, thresholdRange, units, type Mode, type Pose } from "./metrics";
+import { METRICS, METRIC_IDS, canSee, measure, type MetricId, type Pose, type Reading } from "./metrics";
 import { createLandmarker, toPose } from "./pose";
 
 const HOLD_MS = 3000;
 const REPEAT_MS = 5000;
 const DETECTION_INTERVAL_MS = 200;
 const SMOOTHING = 0.4;
-const MIN_VISIBILITY = 0.5;
-const STORAGE_KEY = "posture-guard:v1";
+const STORAGE_KEY = "posture-guard:v2";
 
 interface Settings {
-  mode: Mode;
-  thresholds: Record<Mode, number>;
-  baselines: Partial<Record<Mode, number>>;
+  thresholds: Record<MetricId, number>;
+  baselines: Reading;
 }
 
 function byId<T extends HTMLElement>(id: string): T {
@@ -27,27 +25,20 @@ const overlay = byId<HTMLCanvasElement>("overlay");
 const status = byId<HTMLDivElement>("status");
 const startButton = byId<HTMLButtonElement>("start");
 const calibrateButton = byId<HTMLButtonElement>("calibrate");
-const modeSelect = byId<HTMLSelectElement>("mode");
-const thresholdInput = byId<HTMLInputElement>("threshold");
-const thresholdValue = byId<HTMLOutputElement>("thresholdValue");
-const currentOutput = byId<HTMLOutputElement>("current");
-const baselineOutput = byId<HTMLOutputElement>("baseline");
-const slouchOutput = byId<HTMLOutputElement>("slouch");
+const metricsContainer = byId<HTMLDivElement>("metrics");
 const context = overlay.getContext("2d");
 
 function loadSettings(): Settings {
   const defaults: Settings = {
-    mode: "angled",
-    thresholds: {
-      angled: thresholdRange.angled.initial,
-      side: thresholdRange.side.initial,
-      front: thresholdRange.front.initial,
-    },
+    thresholds: { forwardHead: METRICS.forwardHead.initial, slouch: METRICS.slouch.initial, headDown: METRICS.headDown.initial },
     baselines: {},
   };
   try {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    return stored ? { ...defaults, ...(JSON.parse(stored) as Partial<Settings>) } : defaults;
+    const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Partial<Settings> | null;
+    return {
+      thresholds: { ...defaults.thresholds, ...stored?.thresholds },
+      baselines: { ...stored?.baselines },
+    };
   } catch {
     return defaults;
   }
@@ -65,33 +56,63 @@ const settings = loadSettings();
 const beeper = new Beeper();
 const alarm = new SlouchAlarm(beeper, HOLD_MS, REPEAT_MS);
 let landmarker: PoseLandmarker | undefined;
-let smoothed: number | undefined;
+let smoothed: Reading = {};
 let lastVideoTime = -1;
+
+interface Row {
+  root: HTMLDivElement;
+  limit: HTMLOutputElement;
+  readout: HTMLDivElement;
+}
+
+function createRow(id: MetricId): Row {
+  const metric = METRICS[id];
+  const root = document.createElement("div");
+  root.className = "metric";
+
+  const title = document.createElement("div");
+  title.className = "metric-title";
+  const name = document.createElement("span");
+  name.textContent = metric.label;
+  const limit = document.createElement("output");
+  title.append(name, limit);
+
+  const slider = document.createElement("input");
+  slider.type = "range";
+  slider.step = "1";
+  slider.min = String(metric.min);
+  slider.max = String(metric.max);
+  slider.value = String(settings.thresholds[id]);
+  slider.addEventListener("input", () => {
+    settings.thresholds[id] = Number(slider.value);
+    limit.textContent = `alarm over ${slider.value}°`;
+    saveSettings();
+  });
+  limit.textContent = `alarm over ${slider.value}°`;
+
+  const readout = document.createElement("div");
+  readout.className = "metric-readout";
+
+  root.append(title, slider, readout);
+  metricsContainer.append(root);
+  return { root, limit, readout };
+}
+
+const rows = Object.fromEntries(METRIC_IDS.map((id) => [id, createRow(id)])) as Record<MetricId, Row>;
+
+function degrees(value: number | undefined): string {
+  return value === undefined ? "-" : `${value.toFixed(1)}°`;
+}
+
+function renderRow(id: MetricId, over: number | undefined, bad: boolean): void {
+  const row = rows[id];
+  row.root.classList.toggle("bad", bad);
+  row.readout.textContent = `now ${degrees(smoothed[id])} · baseline ${degrees(settings.baselines[id])} · over ${degrees(over)}`;
+}
 
 function setStatus(text: string, kind: "idle" | "good" | "bad"): void {
   status.textContent = text;
   status.className = `status ${kind}`;
-}
-
-function formatValue(mode: Mode, value: number | undefined): string {
-  if (value === undefined) return "-";
-  return mode === "front" ? value.toFixed(2) : `${value.toFixed(1)}°`;
-}
-
-function syncControls(): void {
-  const range = thresholdRange[settings.mode];
-  modeSelect.value = settings.mode;
-  thresholdInput.min = String(range.min);
-  thresholdInput.max = String(range.max);
-  thresholdInput.value = String(settings.thresholds[settings.mode]);
-  thresholdValue.textContent = `${settings.thresholds[settings.mode]}${units[settings.mode]}`;
-  baselineOutput.textContent = formatValue(settings.mode, settings.baselines[settings.mode]);
-}
-
-function isVisible(mode: Mode, pose: Pose): boolean {
-  const left = Math.min(pose.leftEar.visibility, pose.leftShoulder.visibility);
-  const right = Math.min(pose.rightEar.visibility, pose.rightShoulder.visibility);
-  return mode === "front" ? Math.min(left, right) >= MIN_VISIBILITY : Math.max(left, right) >= MIN_VISIBILITY;
 }
 
 function draw(pose: Pose | undefined, bad: boolean): void {
@@ -100,68 +121,93 @@ function draw(pose: Pose | undefined, bad: boolean): void {
   overlay.height = video.videoHeight;
   context.clearRect(0, 0, overlay.width, overlay.height);
   if (!pose) return;
+  const { image } = pose;
   const color = bad ? "#d64545" : "#3ddc84";
   const at = (p: { x: number; y: number }) => [p.x * overlay.width, p.y * overlay.height] as const;
+  const hipsVisible = Math.min(image.leftHip.visibility, image.rightHip.visibility) >= 0.5;
   context.strokeStyle = color;
   context.fillStyle = color;
   context.lineWidth = 4;
-  for (const [ear, shoulder] of [
-    [pose.leftEar, pose.leftShoulder],
-    [pose.rightEar, pose.rightShoulder],
-  ] as const) {
+  const lines = [
+    [image.leftEar, image.leftShoulder],
+    [image.rightEar, image.rightShoulder],
+    [image.leftShoulder, image.rightShoulder],
+    [image.leftEar, image.nose],
+    [image.rightEar, image.nose],
+    ...(hipsVisible
+      ? [
+          [image.leftShoulder, image.leftHip],
+          [image.rightShoulder, image.rightHip],
+        ]
+      : []),
+  ] as const;
+  for (const [from, to] of lines) {
     context.beginPath();
-    context.moveTo(...at(ear));
-    context.lineTo(...at(shoulder));
+    context.moveTo(...at(from));
+    context.lineTo(...at(to));
     context.stroke();
   }
-  context.beginPath();
-  context.moveTo(...at(pose.leftShoulder));
-  context.lineTo(...at(pose.rightShoulder));
-  context.stroke();
-  for (const p of [pose.leftEar, pose.rightEar, pose.leftShoulder, pose.rightShoulder]) {
+  const points = [image.nose, image.leftEar, image.rightEar, image.leftShoulder, image.rightShoulder];
+  for (const p of hipsVisible ? [...points, image.leftHip, image.rightHip] : points) {
     context.beginPath();
     context.arc(...at(p), 7, 0, Math.PI * 2);
     context.fill();
   }
 }
 
+function smooth(reading: Reading): void {
+  const next: Reading = {};
+  for (const id of METRIC_IDS) {
+    const value = reading[id];
+    if (value === undefined) continue;
+    const previous = smoothed[id];
+    next[id] = previous === undefined ? value : previous + SMOOTHING * (value - previous);
+  }
+  smoothed = next;
+}
+
 function tick(): void {
   if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
 
-  const result = landmarker.detectForVideo(video, performance.now());
+  const now = performance.now();
+  const result = landmarker.detectForVideo(video, now);
   const landmarks = result.landmarks[0];
   const worldLandmarks = result.worldLandmarks[0];
   const pose = landmarks && worldLandmarks && toPose(landmarks, worldLandmarks);
-  const mode = settings.mode;
 
-  if (!pose || !isVisible(mode, pose)) {
-    alarm.update(false, performance.now());
+  if (!pose || !canSee(pose)) {
+    alarm.update(false, now);
     draw(undefined, false);
-    smoothed = undefined;
-    currentOutput.textContent = "-";
-    slouchOutput.textContent = "-";
+    smoothed = {};
+    for (const id of METRIC_IDS) renderRow(id, undefined, false);
     setStatus("Can't see you clearly", "idle");
     return;
   }
 
-  const raw = measure(mode, pose, { width: video.videoWidth, height: video.videoHeight });
-  smoothed = smoothed === undefined ? raw : smoothed + SMOOTHING * (raw - smoothed);
-  currentOutput.textContent = formatValue(mode, smoothed);
+  smooth(measure(pose));
 
-  const baseline = settings.baselines[mode];
-  if (baseline === undefined) {
+  if (settings.baselines.forwardHead === undefined) {
     draw(pose, false);
+    for (const id of METRIC_IDS) renderRow(id, undefined, false);
     setStatus("Sit straight, then press Calibrate", "idle");
     return;
   }
 
-  const slouch = deviation(mode, baseline, smoothed);
-  slouchOutput.textContent = `${slouch.toFixed(1)}${units[mode]}`;
-  const bad = slouch > settings.thresholds[mode];
-  const alarming = alarm.update(bad, performance.now());
-  draw(pose, bad);
-  setStatus(alarming ? "Sit up!" : bad ? "Slouching..." : "Good posture", bad ? "bad" : "good");
+  const bad: string[] = [];
+  for (const id of METRIC_IDS) {
+    const current = smoothed[id];
+    const baseline = settings.baselines[id];
+    const over = current !== undefined && baseline !== undefined ? current - baseline : undefined;
+    const exceeded = over !== undefined && over > settings.thresholds[id];
+    if (exceeded) bad.push(METRICS[id].label.split(" (")[0] ?? id);
+    renderRow(id, over, exceeded);
+  }
+
+  const alarming = alarm.update(bad.length > 0, now);
+  draw(pose, bad.length > 0);
+  if (bad.length === 0) setStatus("Good posture", "good");
+  else setStatus(`${alarming ? "Fix" : "Watch"}: ${bad.join(" + ")}`, "bad");
 }
 
 async function start(): Promise<void> {
@@ -185,26 +231,12 @@ async function start(): Promise<void> {
 startButton.addEventListener("click", () => void start());
 
 calibrateButton.addEventListener("click", () => {
-  if (smoothed === undefined) return;
-  settings.baselines[settings.mode] = smoothed;
+  if (smoothed.forwardHead === undefined) return;
+  settings.baselines = { ...smoothed };
   saveSettings();
-  syncControls();
 });
 
-modeSelect.addEventListener("change", () => {
-  settings.mode = modeSelect.value as Mode;
-  smoothed = undefined;
-  saveSettings();
-  syncControls();
-});
-
-thresholdInput.addEventListener("input", () => {
-  settings.thresholds[settings.mode] = Number(thresholdInput.value);
-  saveSettings();
-  syncControls();
-});
-
-syncControls();
+for (const id of METRIC_IDS) renderRow(id, undefined, false);
 
 const ticker = new Worker(new URL("./ticker.worker.ts", import.meta.url), { type: "module" });
 ticker.onmessage = tick;

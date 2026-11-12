@@ -1,10 +1,17 @@
 import { FilesetResolver, PoseLandmarker, type Landmark, type NormalizedLandmark } from "@mediapipe/tasks-vision";
-import type { Pose } from "./metrics";
+import type { LandmarkName, Point, Point3D, Pose } from "./metrics";
 
-const EAR_LEFT = 7;
-const EAR_RIGHT = 8;
-const SHOULDER_LEFT = 11;
-const SHOULDER_RIGHT = 12;
+const INDEX: Record<LandmarkName, number> = {
+  nose: 0,
+  leftEar: 7,
+  rightEar: 8,
+  leftShoulder: 11,
+  rightShoulder: 12,
+  leftHip: 23,
+  rightHip: 24,
+};
+
+const NAMES = Object.keys(INDEX) as LandmarkName[];
 
 export async function createLandmarker(): Promise<PoseLandmarker> {
   const fileset = await FilesetResolver.forVisionTasks("./wasm");
@@ -21,34 +28,14 @@ export async function createLandmarker(): Promise<PoseLandmarker> {
 }
 
 export function toPose(landmarks: NormalizedLandmark[], worldLandmarks: Landmark[]): Pose | undefined {
-  const point = (index: number) => {
-    const landmark = landmarks[index];
-    return landmark && { x: landmark.x, y: landmark.y, visibility: landmark.visibility ?? 0 };
-  };
-  const leftEar = point(EAR_LEFT);
-  const rightEar = point(EAR_RIGHT);
-  const leftShoulder = point(SHOULDER_LEFT);
-  const rightShoulder = point(SHOULDER_RIGHT);
-  const world = (index: number) => {
-    const landmark = worldLandmarks[index];
-    return landmark && { x: landmark.x, y: landmark.y, z: landmark.z };
-  };
-  const worldLeftEar = world(EAR_LEFT);
-  const worldRightEar = world(EAR_RIGHT);
-  const worldLeftShoulder = world(SHOULDER_LEFT);
-  const worldRightShoulder = world(SHOULDER_RIGHT);
-  if (!leftEar || !rightEar || !leftShoulder || !rightShoulder) return undefined;
-  if (!worldLeftEar || !worldRightEar || !worldLeftShoulder || !worldRightShoulder) return undefined;
-  return {
-    leftEar,
-    rightEar,
-    leftShoulder,
-    rightShoulder,
-    world: {
-      leftEar: worldLeftEar,
-      rightEar: worldRightEar,
-      leftShoulder: worldLeftShoulder,
-      rightShoulder: worldRightShoulder,
-    },
-  };
+  const image = {} as Record<LandmarkName, Point>;
+  const world = {} as Record<LandmarkName, Point3D>;
+  for (const name of NAMES) {
+    const landmark = landmarks[INDEX[name]];
+    const worldLandmark = worldLandmarks[INDEX[name]];
+    if (!landmark || !worldLandmark) return undefined;
+    image[name] = { x: landmark.x, y: landmark.y, visibility: landmark.visibility ?? 0 };
+    world[name] = { x: worldLandmark.x, y: worldLandmark.y, z: worldLandmark.z };
+  }
+  return { image, world };
 }

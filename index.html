@@ -22,21 +22,7 @@
           <button id="start" type="button">Start</button>
           <button id="calibrate" type="button" disabled>Calibrate good posture</button>
         </div>
-        <label>
-          Camera view
-          <select id="mode">
-            <option value="angled">Angled, e.g. 45° (recommended)</option>
-            <option value="side">Pure side view</option>
-            <option value="front">Front (webcam)</option>
-          </select>
-        </label>
-        <label>
-          Sensitivity: alarm after <output id="thresholdValue"></output> of slouch
-          <input id="threshold" type="range" step="1" />
-        </label>
-        <p class="readout">
-          Now: <output id="current">-</output> · Baseline: <output id="baseline">-</output> · Slouch: <output id="slouch">-</output>
-        </p>
+        <div id="metrics" class="metrics"></div>
       </section>
     </main>
     <script type="module" src="/src/main.ts"></script>

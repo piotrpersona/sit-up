@@ -1,14 +1,16 @@
-export type Mode = "angled" | "side" | "front";
+export type LandmarkName =
+  | "nose"
+  | "leftEar"
+  | "rightEar"
+  | "leftShoulder"
+  | "rightShoulder"
+  | "leftHip"
+  | "rightHip";
 
 export interface Point {
   x: number;
   y: number;
   visibility: number;
-}
-
-export interface Frame {
-  width: number;
-  height: number;
 }
 
 export interface Point3D {
@@ -17,89 +19,70 @@ export interface Point3D {
   z: number;
 }
 
-export interface WorldPose {
-  leftEar: Point3D;
-  rightEar: Point3D;
-  leftShoulder: Point3D;
-  rightShoulder: Point3D;
+export interface Pose {
+  image: Record<LandmarkName, Point>;
+  world: Record<LandmarkName, Point3D>;
 }
 
-export interface Pose {
-  leftEar: Point;
-  rightEar: Point;
-  leftShoulder: Point;
-  rightShoulder: Point;
-  world: WorldPose;
-}
+export type MetricId = "forwardHead" | "slouch" | "headDown";
+export type Reading = Partial<Record<MetricId, number>>;
+
+export const METRIC_IDS: MetricId[] = ["forwardHead", "slouch", "headDown"];
+
+export const METRICS: Record<MetricId, { label: string; min: number; max: number; initial: number }> = {
+  forwardHead: { label: "Forward head", min: 3, max: 40, initial: 12 },
+  slouch: { label: "Slouch (needs hips in view)", min: 3, max: 40, initial: 10 },
+  headDown: { label: "Head down (neck flexion)", min: 3, max: 40, initial: 15 },
+};
+
+export const MIN_VISIBILITY = 0.5;
 
 const RAD_TO_DEG = 180 / Math.PI;
 
-function toPixels(p: Point, frame: Frame): Point {
-  return { x: p.x * frame.width, y: p.y * frame.height, visibility: p.visibility };
+interface Horizontal {
+  x: number;
+  z: number;
 }
 
-export function sideAngle(pose: Pose, frame: Frame): number {
-  const useLeft = pose.leftEar.visibility + pose.leftShoulder.visibility >=
-    pose.rightEar.visibility + pose.rightShoulder.visibility;
-  const ear = toPixels(useLeft ? pose.leftEar : pose.rightEar, frame);
-  const shoulder = toPixels(useLeft ? pose.leftShoulder : pose.rightShoulder, frame);
-  const forward = Math.abs(ear.x - shoulder.x);
-  const up = shoulder.y - ear.y;
-  return Math.atan2(forward, up) * RAD_TO_DEG;
+function mid(a: Point3D, b: Point3D): Point3D {
+  return { x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 };
 }
 
-export function angledAngle(world: WorldPose): number {
-  const mid = (a: Point3D, b: Point3D): Point3D => ({
-    x: (a.x + b.x) / 2,
-    y: (a.y + b.y) / 2,
-    z: (a.z + b.z) / 2,
-  });
-  const ear = mid(world.leftEar, world.rightEar);
-  const shoulder = mid(world.leftShoulder, world.rightShoulder);
+function ahead(from: Point3D, to: Point3D, direction: Horizontal): number {
+  return (to.x - from.x) * direction.x + (to.z - from.z) * direction.z;
+}
+
+function facing(world: Pose["world"]): Horizontal {
   const axisX = world.rightShoulder.x - world.leftShoulder.x;
   const axisZ = world.rightShoulder.z - world.leftShoulder.z;
-  const axisLength = Math.hypot(axisX, axisZ);
-  const forward = Math.abs(((ear.x - shoulder.x) * -axisZ + (ear.z - shoulder.z) * axisX) / axisLength);
-  const up = shoulder.y - ear.y;
-  return Math.atan2(forward, up) * RAD_TO_DEG;
+  const length = Math.hypot(axisX, axisZ);
+  const forward = { x: -axisZ / length, z: axisX / length };
+  const noseIsAhead = ahead(mid(world.leftEar, world.rightEar), world.nose, forward) >= 0;
+  return noseIsAhead ? forward : { x: -forward.x, z: -forward.z };
 }
 
-export function frontRatio(pose: Pose, frame: Frame): number {
-  const leftEar = toPixels(pose.leftEar, frame);
-  const rightEar = toPixels(pose.rightEar, frame);
-  const leftShoulder = toPixels(pose.leftShoulder, frame);
-  const rightShoulder = toPixels(pose.rightShoulder, frame);
-  const earY = (leftEar.y + rightEar.y) / 2;
-  const shoulderY = (leftShoulder.y + rightShoulder.y) / 2;
-  const shoulderWidth = Math.hypot(leftShoulder.x - rightShoulder.x, leftShoulder.y - rightShoulder.y);
-  return (shoulderY - earY) / shoulderWidth;
+function leanAngle(upper: Point3D, lower: Point3D, direction: Horizontal): number {
+  return Math.atan2(ahead(lower, upper, direction), lower.y - upper.y) * RAD_TO_DEG;
 }
 
-export function measure(mode: Mode, pose: Pose, frame: Frame): number {
-  switch (mode) {
-    case "angled":
-      return angledAngle(pose.world);
-    case "side":
-      return sideAngle(pose, frame);
-    case "front":
-      return frontRatio(pose, frame);
+export function canSee(pose: Pose): boolean {
+  const { leftEar, rightEar, leftShoulder, rightShoulder } = pose.image;
+  const left = Math.min(leftEar.visibility, leftShoulder.visibility);
+  const right = Math.min(rightEar.visibility, rightShoulder.visibility);
+  return Math.max(left, right) >= MIN_VISIBILITY;
+}
+
+export function measure(pose: Pose): Reading {
+  const { world, image } = pose;
+  const direction = facing(world);
+  const ear = mid(world.leftEar, world.rightEar);
+  const shoulder = mid(world.leftShoulder, world.rightShoulder);
+  const reading: Reading = {
+    forwardHead: leanAngle(ear, shoulder, direction),
+    headDown: Math.atan2(world.nose.y - ear.y, ahead(ear, world.nose, direction)) * RAD_TO_DEG,
+  };
+  if (Math.min(image.leftHip.visibility, image.rightHip.visibility) >= MIN_VISIBILITY) {
+    reading.slouch = leanAngle(shoulder, mid(world.leftHip, world.rightHip), direction);
   }
+  return reading;
 }
-
-export function deviation(mode: Mode, baseline: number, current: number): number {
-  switch (mode) {
-    case "angled":
-    case "side":
-      return current - baseline;
-    case "front":
-      return ((baseline - current) / baseline) * 100;
-  }
-}
-
-export const units: Record<Mode, string> = { angled: "°", side: "°", front: "%" };
-
-export const thresholdRange: Record<Mode, { min: number; max: number; initial: number }> = {
-  angled: { min: 5, max: 40, initial: 15 },
-  side: { min: 5, max: 40, initial: 15 },
-  front: { min: 5, max: 50, initial: 20 },
-};
