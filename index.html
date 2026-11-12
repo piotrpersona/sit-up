@@ -1,0 +1,43 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Posture Guard</title>
+    <link rel="stylesheet" href="/src/style.css" />
+  </head>
+  <body>
+    <main>
+      <h1>Posture Guard</h1>
+      <p class="hint">Runs fully in your browser. Video never leaves your device. Keep this tab visible, browsers slow down hidden tabs.</p>
+
+      <div class="stage">
+        <video id="video" playsinline muted></video>
+        <canvas id="overlay"></canvas>
+        <div id="status" class="status idle">Press Start</div>
+      </div>
+
+      <section class="controls">
+        <div class="row">
+          <button id="start" type="button">Start</button>
+          <button id="calibrate" type="button" disabled>Calibrate good posture</button>
+        </div>
+        <label>
+          Camera view
+          <select id="mode">
+            <option value="side">Side (best)</option>
+            <option value="front">Front (webcam)</option>
+          </select>
+        </label>
+        <label>
+          Sensitivity: alarm after <output id="thresholdValue"></output> of slouch
+          <input id="threshold" type="range" step="1" />
+        </label>
+        <p class="readout">
+          Now: <output id="current">-</output> · Baseline: <output id="baseline">-</output> · Slouch: <output id="slouch">-</output>
+        </p>
+      </section>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
