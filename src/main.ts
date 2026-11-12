@@ -5,7 +5,8 @@ import { createLandmarker, toPose } from "./pose";
 
 const HOLD_MS = 3000;
 const REPEAT_MS = 5000;
-const SMOOTHING = 0.2;
+const DETECTION_INTERVAL_MS = 200;
+const SMOOTHING = 0.4;
 const MIN_VISIBILITY = 0.5;
 const STORAGE_KEY = "posture-guard:v1";
 
@@ -121,7 +122,6 @@ function draw(pose: Pose | undefined, bad: boolean): void {
 }
 
 function tick(): void {
-  requestAnimationFrame(tick);
   if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
 
@@ -199,4 +199,7 @@ thresholdInput.addEventListener("input", () => {
 });
 
 syncControls();
-requestAnimationFrame(tick);
+
+const ticker = new Worker(new URL("./ticker.worker.ts", import.meta.url), { type: "module" });
+ticker.onmessage = tick;
+ticker.postMessage({ intervalMs: DETECTION_INTERVAL_MS });
