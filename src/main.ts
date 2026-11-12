@@ -1,7 +1,8 @@
-import type { PoseLandmarker } from "@mediapipe/tasks-vision";
+import type { PoseLandmarker, PoseLandmarkerResult } from "@mediapipe/tasks-vision";
 import { Beeper, SlouchAlarm } from "./alarm";
 import { METRICS, METRIC_IDS, canSee, measure, type MetricId, type Pose, type Reading } from "./metrics";
 import { createLandmarker, toPose } from "./pose";
+import { render, type Scene, type SilhouetteMask } from "./render";
 
 const HOLD_MS = 3000;
 const REPEAT_MS = 5000;
@@ -10,6 +11,7 @@ const SMOOTHING = 0.4;
 const STORAGE_KEY = "posture-guard:v2";
 
 interface Settings {
+  showCamera: boolean;
   thresholds: Record<MetricId, number>;
   baselines: Reading;
 }
@@ -25,6 +27,8 @@ const overlay = byId<HTMLCanvasElement>("overlay");
 const status = byId<HTMLDivElement>("status");
 const startButton = byId<HTMLButtonElement>("start");
 const calibrateButton = byId<HTMLButtonElement>("calibrate");
+const stage = byId<HTMLDivElement>("stage");
+const showCameraInput = byId<HTMLInputElement>("showCamera");
 const stopButton = byId<HTMLButtonElement>("stop");
 const dialog = byId<HTMLDialogElement>("dialog");
 const dialogTitle = byId<HTMLHeadingElement>("dialogTitle");
@@ -34,12 +38,14 @@ const context = overlay.getContext("2d");
 
 function loadSettings(): Settings {
   const defaults: Settings = {
+    showCamera: false,
     thresholds: { forwardHead: METRICS.forwardHead.initial, slouch: METRICS.slouch.initial, headDown: METRICS.headDown.initial },
     baselines: {},
   };
   try {
     const stored = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? "null") as Partial<Settings> | null;
     return {
+      showCamera: stored?.showCamera ?? defaults.showCamera,
       thresholds: { ...defaults.thresholds, ...stored?.thresholds },
       baselines: { ...stored?.baselines },
     };
@@ -126,44 +132,13 @@ function setStatus(text: string, kind: "idle" | "good" | "bad"): void {
   status.className = `status ${kind}`;
 }
 
-function draw(pose: Pose | undefined, bad: boolean): void {
+function paint(scene: Scene): void {
   if (!context) return;
-  overlay.width = video.videoWidth;
-  overlay.height = video.videoHeight;
-  context.clearRect(0, 0, overlay.width, overlay.height);
-  if (!pose) return;
-  const { image } = pose;
-  const color = bad ? "#d64545" : "#3ddc84";
-  const at = (p: { x: number; y: number }) => [p.x * overlay.width, p.y * overlay.height] as const;
-  const hipsVisible = Math.min(image.leftHip.visibility, image.rightHip.visibility) >= 0.5;
-  context.strokeStyle = color;
-  context.fillStyle = color;
-  context.lineWidth = 4;
-  const lines = [
-    [image.leftEar, image.leftShoulder],
-    [image.rightEar, image.rightShoulder],
-    [image.leftShoulder, image.rightShoulder],
-    [image.leftEar, image.nose],
-    [image.rightEar, image.nose],
-    ...(hipsVisible
-      ? [
-          [image.leftShoulder, image.leftHip],
-          [image.rightShoulder, image.rightHip],
-        ]
-      : []),
-  ] as const;
-  for (const [from, to] of lines) {
-    context.beginPath();
-    context.moveTo(...at(from));
-    context.lineTo(...at(to));
-    context.stroke();
+  if (overlay.width !== video.videoWidth || overlay.height !== video.videoHeight) {
+    overlay.width = video.videoWidth;
+    overlay.height = video.videoHeight;
   }
-  const points = [image.nose, image.leftEar, image.rightEar, image.leftShoulder, image.rightShoulder];
-  for (const p of hipsVisible ? [...points, image.leftHip, image.rightHip] : points) {
-    context.beginPath();
-    context.arc(...at(p), 7, 0, Math.PI * 2);
-    context.fill();
-  }
+  render(context, overlay, scene);
 }
 
 function smooth(reading: Reading): void {
@@ -180,16 +155,24 @@ function smooth(reading: Reading): void {
 function tick(): void {
   if (!landmarker || video.readyState < 2 || video.currentTime === lastVideoTime) return;
   lastVideoTime = video.currentTime;
+  landmarker.detectForVideo(video, performance.now(), process);
+}
 
+function process(result: PoseLandmarkerResult): void {
   const now = performance.now();
-  const result = landmarker.detectForVideo(video, now);
   const landmarks = result.landmarks[0];
   const worldLandmarks = result.worldLandmarks[0];
   const pose = landmarks && worldLandmarks && toPose(landmarks, worldLandmarks);
+  const rawMask = result.segmentationMasks?.[0];
+  const mask: SilhouetteMask | undefined = rawMask && {
+    width: rawMask.width,
+    height: rawMask.height,
+    values: rawMask.getAsFloat32Array(),
+  };
 
   if (!pose || !canSee(pose)) {
     alarm.update(false, now);
-    draw(undefined, false);
+    paint({ mask, bad: false });
     smoothed = {};
     for (const id of METRIC_IDS) renderRow(id, undefined, false);
     setStatus("Can't see you clearly", "idle");
@@ -199,7 +182,7 @@ function tick(): void {
   smooth(measure(pose));
 
   if (settings.baselines.forwardHead === undefined) {
-    draw(pose, false);
+    paint({ landmarks, mask, bad: false });
     for (const id of METRIC_IDS) renderRow(id, undefined, false);
     setStatus("Sit straight, then press Calibrate", "idle");
     return;
@@ -216,7 +199,7 @@ function tick(): void {
   }
 
   const alarming = alarm.update(bad.length > 0, now);
-  draw(pose, bad.length > 0);
+  paint({ landmarks, mask, bad: bad.length > 0 });
   if (bad.length === 0) setStatus("Good posture", "good");
   else setStatus(`${alarming ? "Fix" : "Watch"}: ${bad.join(" + ")}`, "bad");
 }
@@ -229,7 +212,7 @@ async function start(): Promise<void> {
     const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 }, audio: false });
     video.srcObject = stream;
     await video.play();
-    landmarker = await createLandmarker();
+    landmarker = await createLandmarker(!settings.showCamera);
     calibrateButton.disabled = false;
     stopButton.disabled = false;
     wakeLock = await navigator.wakeLock?.request("screen").catch(() => undefined);
@@ -260,6 +243,15 @@ function stop(): void {
 
 startButton.addEventListener("click", () => void start());
 stopButton.addEventListener("click", stop);
+
+showCameraInput.checked = settings.showCamera;
+stage.classList.toggle("abstract", !settings.showCamera);
+showCameraInput.addEventListener("change", () => {
+  settings.showCamera = showCameraInput.checked;
+  stage.classList.toggle("abstract", !settings.showCamera);
+  void landmarker?.setOptions({ outputSegmentationMasks: !settings.showCamera });
+  saveSettings();
+});
 
 calibrateButton.addEventListener("click", () => {
   if (smoothed.forwardHead === undefined) {

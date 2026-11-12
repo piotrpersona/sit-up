@@ -11,7 +11,7 @@
       <h1>Posture Guard</h1>
       <p class="hint">Runs fully in your browser. Video never leaves your device. Keep this tab visible, browsers slow down hidden tabs.</p>
 
-      <div class="stage">
+      <div id="stage" class="stage abstract">
         <video id="video" playsinline muted></video>
         <canvas id="overlay"></canvas>
         <div id="status" class="status idle">Press Start</div>
@@ -23,6 +23,10 @@
           <button id="calibrate" type="button" disabled>Calibrate good posture</button>
           <button id="stop" type="button" class="danger" disabled>Stop</button>
         </div>
+        <label class="check">
+          <input type="checkbox" id="showCamera" />
+          Show camera picture (off: black background with body shape)
+        </label>
         <div id="metrics" class="metrics"></div>
       </section>
     </main>

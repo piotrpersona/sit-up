@@ -12,6 +12,8 @@ Three separate checks, each with its own threshold, all from MediaPipe 3D landma
 
 All values are compared to your calibrated baseline, so calibrate from the camera position you will actually use.
 
+By default the camera picture is hidden. The stage shows a black background, your body silhouette and a skeleton colored by body part (head, torso, each arm, each leg). Tick "Show camera picture" to see the real video instead.
+
 Keep the tab visible, browsers throttle hidden tabs.
 
 ## Run

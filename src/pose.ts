@@ -13,12 +13,13 @@ const INDEX: Record<LandmarkName, number> = {
 
 const NAMES = Object.keys(INDEX) as LandmarkName[];
 
-export async function createLandmarker(): Promise<PoseLandmarker> {
+export async function createLandmarker(outputSegmentationMasks: boolean): Promise<PoseLandmarker> {
   const fileset = await FilesetResolver.forVisionTasks("./wasm");
   const options = (delegate: "GPU" | "CPU") => ({
     baseOptions: { modelAssetPath: "./models/pose_landmarker_lite.task", delegate },
     runningMode: "VIDEO" as const,
     numPoses: 1,
+    outputSegmentationMasks,
   });
   try {
     return await PoseLandmarker.createFromOptions(fileset, options("GPU"));
