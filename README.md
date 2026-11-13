@@ -1,4 +1,4 @@
-# Posture Guard
+# Sit Up (Posture Guard)
 
 Browser slouch detector. Static app, no backend. The camera video stays on your device.
 
